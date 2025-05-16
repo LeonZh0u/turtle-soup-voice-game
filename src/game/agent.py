@@ -1,8 +1,18 @@
 from typing import AsyncIterable, Dict, Optional
-from livekit.agents import Agent
+from livekit.agents import Agent, llm
 from livekit.agents.llm import ChatContext, ChatChunk
 from pydantic import BaseModel
-from ..utils.utils import generate_turtle_soup_prompt
+from utils.utils import generate_turtle_soup_prompt
+import logging
+import uuid
+from livekit.plugins import (
+    deepgram, 
+    elevenlabs, 
+    openai, 
+)
+import os
+
+logger = logging.getLogger(__name__)
 
 class GameState(BaseModel):
     """Represents the current state of the game."""
@@ -16,7 +26,16 @@ class GameState(BaseModel):
 
 class TurtleSoupAgent(Agent):
     def __init__(self, mystery: str, answer: str, keywords: list[str]):
-        super().__init__()
+        super().__init__(
+            instructions=generate_turtle_soup_prompt(
+                story=mystery,
+                truth=answer,
+                tips=", ".join(keywords)
+            ),
+            stt=deepgram.STT(),
+            llm=openai.LLM(),
+            tts=elevenlabs.TTS(voice_id=os.environ["ELEVENLABS_VOICE_ID"]),  # Using ElevenLabs for TTS
+        )
         self.game_state = GameState(
             mystery=mystery,
             answer=answer,
@@ -24,11 +43,6 @@ class TurtleSoupAgent(Agent):
         )
         self.max_hints = 3
         self.max_questions = 20
-        self._system_prompt = generate_turtle_soup_prompt(
-            story=mystery,
-            truth=answer,
-            tips=", ".join(keywords)
-        )
 
     async def llm_node(
         self,
@@ -37,68 +51,81 @@ class TurtleSoupAgent(Agent):
         model_settings
     ) -> AsyncIterable[ChatChunk]:
         """Process player questions and generate appropriate responses."""
-        if not chat_ctx.messages:
-            intro = self._get_introduction()
-            self.game_state.last_response = intro
-            yield ChatChunk(text=intro)
-            return
-
-        user_question = chat_ctx.messages[-1].content
-        self.game_state.question_count += 1
+        # if self.game_state.last_response == "":
+        #     yield ChatChunk(
+        #         role="assistant",
+        #         content=""
+        #     )
+        #     return
 
         # Check if we've exceeded the question limit
         if self.game_state.question_count > self.max_questions:
             response = "I'm sorry, but you've reached the maximum number of questions. Would you like to know the answer?"
-            self.game_state.last_response = response
-            yield ChatChunk(text=response)
+            yield ChatChunk(
+                id=str(uuid.uuid4()),
+                role="assistant",
+                content=response
+            )
             return
 
         # Process the question and generate response
-        response = await self._process_question(user_question)
-        self.game_state.last_response = response
-        yield ChatChunk(text=response)
+        # async for chunk in Agent.default.llm_node(self, chat_ctx, None, None):
+        #     logger.info(f"chat_ctx: {chat_ctx.items[-1]}")
+        #     content = self._extract_content(chunk)
+        #     if content is not None:
+        #         full_response += content
+        #         yield ChatChunk(
+        #             id=str(uuid.uuid4()),
+        #             role="assistant",
+        #             content=chunk
+        #         )
+        async with self.llm.chat(
+            chat_ctx=chat_ctx,
+        ) as stream:
+            async for chunk in stream:
+                yield chunk
+        self.game_state.question_count += 1
+        # self.game_state.last_response = full_response.strip()
 
     def _get_introduction(self) -> str:
         """Generate the game introduction."""
         return (
-            f"Welcome to Turtle Soup! I have a mystery for you to solve:\n\n"
-            f"{self.game_state.mystery}\n\n"
-            f"You can ask me yes/no questions to figure out what's happening. "
-            f"I'll respond with 'Yes', 'No', 'Maybe', or 'Irrelevant'. "
-            f"You have {self.max_questions} questions to solve the mystery. "
-            f"Good luck!"
+            f"I am the host of the game Turtle Soup today. Are you ready to hear about the mystery?"
         )
 
-    async def _process_question(self, question: str) -> str:
+    async def _process_question(self, chat_ctx: ChatContext) -> AsyncIterable[str]:
         """Process a player's question using LLM to determine the appropriate response."""
-        # Create a chat context with the system prompt and user question
-        chat_context = ChatContext(
-            messages=[
-                {"role": "system", "content": self._system_prompt},
-                {"role": "user", "content": question}
-            ]
-        )
-
+        full_response = ""
         # Get response from LLM
-        async for chunk in self.llm_node(chat_context, None, None):
-            response = chunk.text.strip()
-            
-            # If the response indicates a crucial question, add a hint
-            if "crucial" in response.lower() and self._should_give_hint():
-                self.game_state.hints_given += 1
-                response += " (This is a crucial question that's getting closer to the truth!)"
-            
-            return response
+        async for chunk in Agent.default.llm_node(self, chat_ctx, None, None):
+            logger.info(f"chat_ctx: {chat_ctx.items[-1]}")
+            content = self._extract_content(chunk)
+            if content is not None:
+                full_response += content
+                yield content
+        self.game_state.question_count += 1
+        self.game_state.last_response = full_response.strip()
+        
+        # If the response indicates a crucial question, add a hint
+        # if "crucial" in full_response.lower() and self._should_give_hint():
+        #     self.game_state.hints_given += 1
+        #     yield " (This is a crucial question that's getting closer to the truth!)"
 
     async def on_enter(self) -> None:
         """Called when the agent enters a room."""
-        pass
-
-    async def on_exit(self) -> None:
-        """Called when the agent exits a room."""
-        pass
+        self.session.say(self._get_introduction())
 
     def _should_give_hint(self) -> bool:
         """Determine if a hint should be given based on game state."""
         return (self.game_state.question_count > 10 and 
                 self.game_state.hints_given < self.max_hints) 
+    
+    def _extract_content(self, chunk: any) -> Optional[str]:
+        """Extract content from a chunk, handling different chunk formats."""
+        if not chunk:
+            return None
+        if isinstance(chunk, str):
+            return chunk
+        if hasattr(chunk, 'delta'):
+            return getattr(chunk.delta, 'content', None)
+        return None
