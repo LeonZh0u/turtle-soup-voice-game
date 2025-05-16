@@ -34,14 +34,10 @@ OPENAI_API_KEY=your_openai_api_key
 
 ## 🚀 Running the Game
 
-1. Start the server:
+Start the server:
 ```bash
-python src/main.py
+python src/main.py console
 ```
-
-2. Open your browser and navigate to `http://localhost:8000`
-
-3. Join a game room and start playing!
 
 ## 🎯 How to Play
 
@@ -52,7 +48,3 @@ python src/main.py
    - "No" - The question is incorrect
    - "Maybe" - The question is partially correct
    - "Irrelevant" - The question doesn't help solve the mystery
-
-## 📝 License
-
-MIT License
