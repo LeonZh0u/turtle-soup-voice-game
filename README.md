@@ -25,11 +25,14 @@ source venv/bin/activate  # On Windows: venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
-4. Create a `.env` file with your API keys:
+4. Copy `.env.example` and create a `.env` file with your API keys:
 ```bash
+LIVEKIT_URL=
 LIVEKIT_API_KEY=your_livekit_api_key
 LIVEKIT_API_SECRET=your_livekit_api_secret
 OPENAI_API_KEY=your_openai_api_key
+DEEPGRAM_API_KEY=
+ELEVENLABS_VOICE_ID=
 ```
 
 ## 🚀 Running the Game
